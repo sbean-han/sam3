@@ -59,6 +59,7 @@
     <label>도구</label>
     <button id="btn-brush" class="active" title="브러시 (B)">🖌 Brush</button>
     <button id="btn-polygon" title="폴리곤 (P)">⬡ Polygon</button>
+    <button id="btn-bbox" title="바운딩 박스 (R)">⬜ BBox</button>
     <button id="btn-erase" title="지우개 (E)">◻ Erase</button>
   </div>
 
@@ -92,6 +93,7 @@
   <div class="tool-group">
     <button id="btn-export-mask">⬇ Mask PNG</button>
     <button id="btn-export-overlay">⬇ Overlay PNG</button>
+    <button id="btn-export-bbox">⬇ BBox JSON</button>
   </div>
 </div>
 
@@ -103,7 +105,7 @@
 <div id="status-bar">
   <span id="coord-display">x: 0, y: 0</span>
   <span id="image-size-display"></span>
-  <span>Space+드래그: 이동 | 휠: 줌 | B/P/E: 도구 전환</span>
+  <span>Space+드래그: 이동 | 휠: 줌 | B/P/R/E: 도구 전환</span>
 </div>
 
 <script>
@@ -114,7 +116,7 @@ let zoom = 1, panX = 0, panY = 0;
 let imgW = 0, imgH = 0;
 let img = null;
 
-let tool = 'brush'; // 'brush' | 'polygon' | 'erase'
+let tool = 'brush'; // 'brush' | 'polygon' | 'bbox' | 'erase'
 let brushSize = 20;
 let maskColor = '#ff0000';
 let maskOpacity = 0.5;
@@ -129,7 +131,12 @@ let panOrigin = { x: 0, y: 0 };
 let polyPoints = [];
 let polyPreview = null; // current mouse pos for preview
 
-// mask layers: array of ImageData snapshots for undo
+// bbox state
+let bboxes = [];          // [{ x, y, w, h, color }] in image coords
+let bboxStart = null;     // image coord where drag started
+let bboxPreview = null;   // current mouse image coord while dragging
+
+// mask layers: undo stack entries = { imageData, bboxes }
 let maskCanvas = document.createElement('canvas');
 let maskCtx = maskCanvas.getContext('2d');
 let undoStack = [];
@@ -148,6 +155,7 @@ function loadImage() {
     maskCanvas.width = imgW;
     maskCanvas.height = imgH;
     maskCtx.clearRect(0, 0, imgW, imgH);
+    bboxes = [];
     resizeCanvas();
     fitToWindow();
     document.getElementById('image-size-display').textContent = `이미지: ${imgW}×${imgH}`;
@@ -262,17 +270,67 @@ function render() {
   ctx.lineWidth = 1 / zoom;
   ctx.strokeRect(0, 0, imgW, imgH);
   ctx.restore();
+
+  // draw committed bboxes (screen coords)
+  bboxes.forEach(b => drawBboxScreen(b.x, b.y, b.w, b.h, b.color, false));
+
+  // draw bbox preview while dragging
+  if (tool === 'bbox' && bboxStart && bboxPreview) {
+    const x = Math.min(bboxStart.x, bboxPreview.x);
+    const y = Math.min(bboxStart.y, bboxPreview.y);
+    const w = Math.abs(bboxPreview.x - bboxStart.x);
+    const h = Math.abs(bboxPreview.y - bboxStart.y);
+    drawBboxScreen(x, y, w, h, maskColor, true);
+  }
+}
+
+function drawBboxScreen(ix, iy, iw, ih, color, isPreview) {
+  const tl = imageToScreen(ix, iy);
+  const br = imageToScreen(ix + iw, iy + ih);
+  const sw = br.x - tl.x, sh = br.y - tl.y;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = isPreview ? 1.5 : 2;
+  ctx.setLineDash(isPreview ? [5, 3] : []);
+  ctx.fillStyle = color + '22';
+  ctx.fillRect(tl.x, tl.y, sw, sh);
+  ctx.strokeRect(tl.x, tl.y, sw, sh);
+
+  // corner handles
+  const hs = 5;
+  [[tl.x, tl.y], [br.x, tl.y], [tl.x, br.y], [br.x, br.y]].forEach(([cx, cy]) => {
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - hs, cy - hs, hs * 2, hs * 2);
+  });
+
+  // size label
+  if (!isPreview) {
+    ctx.setLineDash([]);
+    ctx.font = '11px monospace';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(tl.x + 2, tl.y + 2, ctx.measureText(`${Math.round(iw)}×${Math.round(ih)}`).width + 6, 16);
+    ctx.fillStyle = color;
+    ctx.fillText(`${Math.round(iw)}×${Math.round(ih)}`, tl.x + 5, tl.y + 14);
+  }
+  ctx.restore();
 }
 
 // ─── Undo ─────────────────────────────────────────────────────────────────────
 function saveUndo() {
-  undoStack.push(maskCtx.getImageData(0, 0, imgW, imgH));
+  undoStack.push({
+    imageData: maskCtx.getImageData(0, 0, imgW, imgH),
+    bboxes: JSON.parse(JSON.stringify(bboxes)),
+  });
   if (undoStack.length > 30) undoStack.shift();
 }
 
 function undo() {
   if (undoStack.length === 0) return;
-  maskCtx.putImageData(undoStack.pop(), 0, 0);
+  const snap = undoStack.pop();
+  maskCtx.putImageData(snap.imageData, 0, 0);
+  bboxes = snap.bboxes;
   render();
 }
 
@@ -355,6 +413,14 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
+  // bbox
+  if (tool === 'bbox') {
+    bboxStart = ip;
+    bboxPreview = ip;
+    render();
+    return;
+  }
+
   // brush / erase
   isDrawing = true;
   saveUndo();
@@ -383,6 +449,12 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
+  if (tool === 'bbox' && bboxStart) {
+    bboxPreview = ip;
+    render();
+    return;
+  }
+
   if (isDrawing && lastImgPos) {
     paintLine(lastImgPos.x, lastImgPos.y, ip.x, ip.y, tool === 'erase');
     lastImgPos = ip;
@@ -390,7 +462,20 @@ canvas.addEventListener('mousemove', (e) => {
   }
 });
 
-canvas.addEventListener('mouseup', () => {
+canvas.addEventListener('mouseup', (e) => {
+  if (tool === 'bbox' && bboxStart && bboxPreview) {
+    const x = Math.min(bboxStart.x, bboxPreview.x);
+    const y = Math.min(bboxStart.y, bboxPreview.y);
+    const w = Math.abs(bboxPreview.x - bboxStart.x);
+    const h = Math.abs(bboxPreview.y - bboxStart.y);
+    if (w > 2 && h > 2) {
+      saveUndo();
+      bboxes.push({ x, y, w, h, color: maskColor });
+    }
+    bboxStart = null; bboxPreview = null;
+    render();
+    return;
+  }
   isDrawing = false; isPanning = false;
   wrapper.classList.remove('dragging');
   lastImgPos = null;
@@ -398,6 +483,7 @@ canvas.addEventListener('mouseup', () => {
 
 canvas.addEventListener('mouseleave', () => {
   isDrawing = false; isPanning = false;
+  bboxPreview = null;
   wrapper.classList.remove('dragging');
   lastImgPos = null;
 });
@@ -423,6 +509,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { spaceDown = true; wrapper.classList.add('panning'); e.preventDefault(); }
   if (e.key === 'b' || e.key === 'B') setTool('brush');
   if (e.key === 'p' || e.key === 'P') setTool('polygon');
+  if (e.key === 'r' || e.key === 'R') setTool('bbox');
   if (e.key === 'e' || e.key === 'E') setTool('erase');
   if (e.key === 'z' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo(); }
   if (e.key === 'Enter' && tool === 'polygon') finishPolygon();
@@ -440,13 +527,16 @@ window.addEventListener('keyup', (e) => {
 function setTool(t) {
   tool = t;
   if (t !== 'polygon') cancelPolygon();
+  if (t !== 'bbox') { bboxStart = null; bboxPreview = null; }
   document.getElementById('btn-brush').classList.toggle('active', t === 'brush');
   document.getElementById('btn-polygon').classList.toggle('active', t === 'polygon');
+  document.getElementById('btn-bbox').classList.toggle('active', t === 'bbox');
   document.getElementById('btn-erase').classList.toggle('active', t === 'erase');
 }
 
 document.getElementById('btn-brush').onclick = () => setTool('brush');
 document.getElementById('btn-polygon').onclick = () => setTool('polygon');
+document.getElementById('btn-bbox').onclick = () => setTool('bbox');
 document.getElementById('btn-erase').onclick = () => setTool('erase');
 
 const brushSlider = document.getElementById('brush-size');
@@ -468,9 +558,10 @@ document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.2);
 document.getElementById('btn-zoom-reset').onclick = () => { fitToWindow(); render(); };
 document.getElementById('btn-undo').onclick = undo;
 document.getElementById('btn-clear').onclick = () => {
-  if (!confirm('마스크를 전부 지우시겠습니까?')) return;
+  if (!confirm('마스크와 BBox를 모두 지우시겠습니까?')) return;
   saveUndo();
   maskCtx.clearRect(0, 0, imgW, imgH);
+  bboxes = [];
   render();
 };
 
@@ -509,6 +600,22 @@ document.getElementById('btn-export-overlay').onclick = () => {
   oc.globalAlpha = maskOpacity;
   oc.drawImage(maskCanvas, 0, 0);
   download(out, 'overlay.png');
+};
+
+document.getElementById('btn-export-bbox').onclick = () => {
+  const data = bboxes.map((b, i) => ({
+    id: i,
+    x: Math.round(b.x), y: Math.round(b.y),
+    w: Math.round(b.w), h: Math.round(b.h),
+    x2: Math.round(b.x + b.w), y2: Math.round(b.y + b.h),
+    color: b.color,
+  }));
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'bboxes.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
 };
 
 function download(canvas, filename) {
