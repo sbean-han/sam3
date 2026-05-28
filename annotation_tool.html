@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Mask Annotator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #eee; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  #toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
+    flex-shrink: 0; flex-wrap: wrap;
+  }
+
+  .tool-group { display: flex; gap: 4px; align-items: center; padding-right: 12px; border-right: 1px solid #0f3460; }
+  .tool-group:last-child { border-right: none; }
+
+  button {
+    padding: 6px 12px; border: 1px solid #0f3460; background: #0f3460;
+    color: #eee; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.15s;
+  }
+  button:hover { background: #e94560; border-color: #e94560; }
+  button.active { background: #e94560; border-color: #e94560; }
+
+  label { font-size: 12px; color: #aaa; }
+
+  input[type=range] { width: 80px; accent-color: #e94560; }
+  input[type=color] { width: 32px; height: 28px; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; background: none; padding: 2px; }
+  input[type=number] { width: 50px; padding: 4px 6px; background: #0f3460; border: 1px solid #333; color: #eee; border-radius: 4px; font-size: 12px; }
+
+  #zoom-level { font-size: 12px; color: #e94560; min-width: 40px; text-align: center; }
+
+  #canvas-wrapper {
+    flex: 1; overflow: hidden; position: relative; cursor: crosshair;
+  }
+  #canvas-wrapper.panning { cursor: grab; }
+  #canvas-wrapper.panning.dragging { cursor: grabbing; }
+
+  #main-canvas { display: block; }
+
+  #status-bar {
+    padding: 4px 12px; background: #16213e; border-top: 1px solid #0f3460;
+    font-size: 11px; color: #888; display: flex; gap: 16px; flex-shrink: 0;
+  }
+
+  #polygon-hint {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 12px;
+    font-size: 12px; pointer-events: none; display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="tool-group">
+    <label>도구</label>
+    <button id="btn-brush" class="active" title="브러시 (B)">🖌 Brush</button>
+    <button id="btn-polygon" title="폴리곤 (P)">⬡ Polygon</button>
+    <button id="btn-erase" title="지우개 (E)">◻ Erase</button>
+  </div>
+
+  <div class="tool-group">
+    <label>크기</label>
+    <input type="range" id="brush-size" min="2" max="100" value="20">
+    <input type="number" id="brush-size-num" min="2" max="100" value="20">
+  </div>
+
+  <div class="tool-group">
+    <label>색상</label>
+    <input type="color" id="mask-color" value="#ff0000">
+    <label>투명도</label>
+    <input type="range" id="mask-opacity" min="10" max="100" value="50">
+    <span id="opacity-val">50%</span>
+  </div>
+
+  <div class="tool-group">
+    <label>줌</label>
+    <button id="btn-zoom-out" title="축소 (-)">−</button>
+    <span id="zoom-level">100%</span>
+    <button id="btn-zoom-in" title="확대 (+)">+</button>
+    <button id="btn-zoom-reset" title="초기화 (0)">Reset</button>
+  </div>
+
+  <div class="tool-group">
+    <button id="btn-undo" title="실행 취소 (Ctrl+Z)">↩ Undo</button>
+    <button id="btn-clear" title="전체 지우기">🗑 Clear</button>
+  </div>
+
+  <div class="tool-group">
+    <button id="btn-export-mask">⬇ Mask PNG</button>
+    <button id="btn-export-overlay">⬇ Overlay PNG</button>
+  </div>
+</div>
+
+<div id="canvas-wrapper">
+  <canvas id="main-canvas"></canvas>
+  <div id="polygon-hint">클릭으로 점 추가 | Enter: 완성 | Esc: 취소</div>
+</div>
+
+<div id="status-bar">
+  <span id="coord-display">x: 0, y: 0</span>
+  <span id="image-size-display"></span>
+  <span>Space+드래그: 이동 | 휠: 줌 | B/P/E: 도구 전환</span>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const IMG_SRC = 'aaa/astronaut.png';
+
+let zoom = 1, panX = 0, panY = 0;
+let imgW = 0, imgH = 0;
+let img = null;
+
+let tool = 'brush'; // 'brush' | 'polygon' | 'erase'
+let brushSize = 20;
+let maskColor = '#ff0000';
+let maskOpacity = 0.5;
+
+let isDrawing = false;
+let isPanning = false;
+let spaceDown = false;
+let panStart = { x: 0, y: 0 };
+let panOrigin = { x: 0, y: 0 };
+
+// polygon state
+let polyPoints = [];
+let polyPreview = null; // current mouse pos for preview
+
+// mask layers: array of ImageData snapshots for undo
+let maskCanvas = document.createElement('canvas');
+let maskCtx = maskCanvas.getContext('2d');
+let undoStack = [];
+
+// ─── DOM ──────────────────────────────────────────────────────────────────────
+const wrapper = document.getElementById('canvas-wrapper');
+const canvas = document.getElementById('main-canvas');
+const ctx = canvas.getContext('2d');
+
+// ─── Image load ───────────────────────────────────────────────────────────────
+function loadImage() {
+  img = new Image();
+  img.onload = () => {
+    imgW = img.naturalWidth;
+    imgH = img.naturalHeight;
+    maskCanvas.width = imgW;
+    maskCanvas.height = imgH;
+    maskCtx.clearRect(0, 0, imgW, imgH);
+    resizeCanvas();
+    fitToWindow();
+    document.getElementById('image-size-display').textContent = `이미지: ${imgW}×${imgH}`;
+    render();
+  };
+  img.onerror = () => {
+    // draw placeholder
+    imgW = 800; imgH = 600;
+    maskCanvas.width = imgW; maskCanvas.height = imgH;
+    resizeCanvas(); fitToWindow();
+    document.getElementById('image-size-display').textContent = `이미지 없음 (${IMG_SRC})`;
+    render();
+  };
+  img.src = IMG_SRC;
+}
+
+// ─── Canvas resize ────────────────────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width = wrapper.clientWidth;
+  canvas.height = wrapper.clientHeight;
+}
+
+function fitToWindow() {
+  const scaleX = wrapper.clientWidth / imgW;
+  const scaleY = wrapper.clientHeight / imgH;
+  zoom = Math.min(scaleX, scaleY) * 0.9;
+  panX = (wrapper.clientWidth - imgW * zoom) / 2;
+  panY = (wrapper.clientHeight - imgH * zoom) / 2;
+  updateZoomLabel();
+}
+
+// ─── Coordinate helpers ───────────────────────────────────────────────────────
+function screenToImage(sx, sy) {
+  return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
+}
+
+function imageToScreen(ix, iy) {
+  return { x: ix * zoom + panX, y: iy * zoom + panY };
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.save();
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
+
+  // image
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.imageSmoothingEnabled = zoom < 1;
+    ctx.drawImage(img, 0, 0);
+  } else {
+    // placeholder grid
+    ctx.fillStyle = '#2a2a3e';
+    ctx.fillRect(0, 0, imgW, imgH);
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1 / zoom;
+    for (let x = 0; x < imgW; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, imgH); ctx.stroke(); }
+    for (let y = 0; y < imgH; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(imgW, y); ctx.stroke(); }
+    ctx.fillStyle = '#666'; ctx.font = `${20/zoom}px sans-serif`;
+    ctx.fillText(`이미지를 찾을 수 없음: ${IMG_SRC}`, 20, 40);
+  }
+
+  // mask overlay
+  ctx.globalAlpha = maskOpacity;
+  ctx.drawImage(maskCanvas, 0, 0);
+  ctx.globalAlpha = 1;
+
+  ctx.restore();
+
+  // polygon preview (screen coords)
+  if (tool === 'polygon' && polyPoints.length > 0) {
+    ctx.save();
+    ctx.strokeStyle = '#00ffff';
+    ctx.fillStyle = 'rgba(0,255,255,0.15)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+
+    const pts = polyPoints.map(p => imageToScreen(p.x, p.y));
+
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (polyPreview) {
+      ctx.lineTo(polyPreview.x, polyPreview.y);
+      // close preview line
+      ctx.lineTo(pts[0].x, pts[0].y);
+      ctx.fill();
+    }
+    ctx.stroke();
+
+    // dots
+    pts.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, i === 0 ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? '#ff0' : '#00ffff';
+      ctx.setLineDash([]);
+      ctx.fill();
+    });
+
+    ctx.restore();
+  }
+
+  // image border
+  ctx.save();
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1 / zoom;
+  ctx.strokeRect(0, 0, imgW, imgH);
+  ctx.restore();
+}
+
+// ─── Undo ─────────────────────────────────────────────────────────────────────
+function saveUndo() {
+  undoStack.push(maskCtx.getImageData(0, 0, imgW, imgH));
+  if (undoStack.length > 30) undoStack.shift();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  maskCtx.putImageData(undoStack.pop(), 0, 0);
+  render();
+}
+
+// ─── Drawing tools ────────────────────────────────────────────────────────────
+function paintBrush(ix, iy, erase) {
+  maskCtx.save();
+  maskCtx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+  maskCtx.fillStyle = maskColor;
+  maskCtx.beginPath();
+  maskCtx.arc(ix, iy, brushSize / 2, 0, Math.PI * 2);
+  maskCtx.fill();
+  maskCtx.restore();
+}
+
+function paintLine(ix1, iy1, ix2, iy2, erase) {
+  const dist = Math.hypot(ix2 - ix1, iy2 - iy1);
+  const steps = Math.max(1, Math.ceil(dist / (brushSize / 4)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    paintBrush(ix1 + (ix2 - ix1) * t, iy1 + (iy2 - iy1) * t, erase);
+  }
+}
+
+function finishPolygon() {
+  if (polyPoints.length < 3) { cancelPolygon(); return; }
+  saveUndo();
+  maskCtx.save();
+  maskCtx.globalCompositeOperation = 'source-over';
+  maskCtx.fillStyle = maskColor;
+  maskCtx.beginPath();
+  maskCtx.moveTo(polyPoints[0].x, polyPoints[0].y);
+  for (let i = 1; i < polyPoints.length; i++) maskCtx.lineTo(polyPoints[i].x, polyPoints[i].y);
+  maskCtx.closePath();
+  maskCtx.fill();
+  maskCtx.restore();
+  polyPoints = [];
+  polyPreview = null;
+  document.getElementById('polygon-hint').style.display = 'none';
+  render();
+}
+
+function cancelPolygon() {
+  polyPoints = [];
+  polyPreview = null;
+  document.getElementById('polygon-hint').style.display = 'none';
+  render();
+}
+
+// ─── Mouse events ─────────────────────────────────────────────────────────────
+let lastImgPos = null;
+
+canvas.addEventListener('mousedown', (e) => {
+  if (e.button === 1) return;
+  const sp = { x: e.offsetX, y: e.offsetY };
+
+  // panning mode
+  if (spaceDown || e.button === 2) {
+    isPanning = true;
+    panStart = sp;
+    panOrigin = { x: panX, y: panY };
+    wrapper.classList.add('dragging');
+    return;
+  }
+
+  const ip = screenToImage(sp.x, sp.y);
+
+  if (tool === 'polygon') {
+    // check if clicking near first point to close
+    if (polyPoints.length >= 3) {
+      const first = imageToScreen(polyPoints[0].x, polyPoints[0].y);
+      const d = Math.hypot(sp.x - first.x, sp.y - first.y);
+      if (d < 12) { finishPolygon(); return; }
+    }
+    if (polyPoints.length === 0) {
+      document.getElementById('polygon-hint').style.display = 'block';
+      saveUndo();
+    }
+    polyPoints.push({ x: ip.x, y: ip.y });
+    render();
+    return;
+  }
+
+  // brush / erase
+  isDrawing = true;
+  saveUndo();
+  lastImgPos = ip;
+  paintBrush(ip.x, ip.y, tool === 'erase');
+  render();
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const sp = { x: e.offsetX, y: e.offsetY };
+  const ip = screenToImage(sp.x, sp.y);
+
+  document.getElementById('coord-display').textContent =
+    `x: ${Math.round(ip.x)}, y: ${Math.round(ip.y)}`;
+
+  if (isPanning) {
+    panX = panOrigin.x + (sp.x - panStart.x);
+    panY = panOrigin.y + (sp.y - panStart.y);
+    render();
+    return;
+  }
+
+  if (tool === 'polygon') {
+    polyPreview = sp;
+    render();
+    return;
+  }
+
+  if (isDrawing && lastImgPos) {
+    paintLine(lastImgPos.x, lastImgPos.y, ip.x, ip.y, tool === 'erase');
+    lastImgPos = ip;
+    render();
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  isDrawing = false; isPanning = false;
+  wrapper.classList.remove('dragging');
+  lastImgPos = null;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  isDrawing = false; isPanning = false;
+  wrapper.classList.remove('dragging');
+  lastImgPos = null;
+});
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ─── Wheel zoom ───────────────────────────────────────────────────────────────
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+  const mx = e.offsetX, my = e.offsetY;
+  const newZoom = clamp(zoom * factor, 0.05, 20);
+  // zoom toward mouse pointer
+  panX = mx - (mx - panX) * (newZoom / zoom);
+  panY = my - (my - panY) * (newZoom / zoom);
+  zoom = newZoom;
+  updateZoomLabel();
+  render();
+}, { passive: false });
+
+// ─── Keyboard ─────────────────────────────────────────────────────────────────
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Space') { spaceDown = true; wrapper.classList.add('panning'); e.preventDefault(); }
+  if (e.key === 'b' || e.key === 'B') setTool('brush');
+  if (e.key === 'p' || e.key === 'P') setTool('polygon');
+  if (e.key === 'e' || e.key === 'E') setTool('erase');
+  if (e.key === 'z' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo(); }
+  if (e.key === 'Enter' && tool === 'polygon') finishPolygon();
+  if (e.key === 'Escape' && tool === 'polygon') cancelPolygon();
+  if (e.key === '+' || e.key === '=') zoomBy(1.2);
+  if (e.key === '-') zoomBy(1 / 1.2);
+  if (e.key === '0') { fitToWindow(); render(); }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { spaceDown = false; wrapper.classList.remove('panning'); }
+});
+
+// ─── Toolbar controls ─────────────────────────────────────────────────────────
+function setTool(t) {
+  tool = t;
+  if (t !== 'polygon') cancelPolygon();
+  document.getElementById('btn-brush').classList.toggle('active', t === 'brush');
+  document.getElementById('btn-polygon').classList.toggle('active', t === 'polygon');
+  document.getElementById('btn-erase').classList.toggle('active', t === 'erase');
+}
+
+document.getElementById('btn-brush').onclick = () => setTool('brush');
+document.getElementById('btn-polygon').onclick = () => setTool('polygon');
+document.getElementById('btn-erase').onclick = () => setTool('erase');
+
+const brushSlider = document.getElementById('brush-size');
+const brushNum = document.getElementById('brush-size-num');
+brushSlider.oninput = () => { brushSize = +brushSlider.value; brushNum.value = brushSlider.value; };
+brushNum.oninput = () => { brushSize = clamp(+brushNum.value, 2, 100); brushSlider.value = brushSize; };
+
+document.getElementById('mask-color').oninput = (e) => { maskColor = e.target.value; };
+
+const opacitySlider = document.getElementById('mask-opacity');
+opacitySlider.oninput = () => {
+  maskOpacity = +opacitySlider.value / 100;
+  document.getElementById('opacity-val').textContent = opacitySlider.value + '%';
+  render();
+};
+
+document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.2);
+document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.2);
+document.getElementById('btn-zoom-reset').onclick = () => { fitToWindow(); render(); };
+document.getElementById('btn-undo').onclick = undo;
+document.getElementById('btn-clear').onclick = () => {
+  if (!confirm('마스크를 전부 지우시겠습니까?')) return;
+  saveUndo();
+  maskCtx.clearRect(0, 0, imgW, imgH);
+  render();
+};
+
+function zoomBy(factor) {
+  const cx = wrapper.clientWidth / 2, cy = wrapper.clientHeight / 2;
+  const newZoom = clamp(zoom * factor, 0.05, 20);
+  panX = cx - (cx - panX) * (newZoom / zoom);
+  panY = cy - (cy - panY) * (newZoom / zoom);
+  zoom = newZoom;
+  updateZoomLabel();
+  render();
+}
+
+function updateZoomLabel() {
+  document.getElementById('zoom-level').textContent = Math.round(zoom * 100) + '%';
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+document.getElementById('btn-export-mask').onclick = () => {
+  // export pure mask (black bg, colored mask) as PNG
+  const out = document.createElement('canvas');
+  out.width = imgW; out.height = imgH;
+  const oc = out.getContext('2d');
+  oc.fillStyle = '#000';
+  oc.fillRect(0, 0, imgW, imgH);
+  oc.drawImage(maskCanvas, 0, 0);
+  download(out, 'mask.png');
+};
+
+document.getElementById('btn-export-overlay').onclick = () => {
+  // export image + mask blended
+  const out = document.createElement('canvas');
+  out.width = imgW; out.height = imgH;
+  const oc = out.getContext('2d');
+  if (img && img.complete && img.naturalWidth > 0) oc.drawImage(img, 0, 0);
+  oc.globalAlpha = maskOpacity;
+  oc.drawImage(maskCanvas, 0, 0);
+  download(out, 'overlay.png');
+};
+
+function download(canvas, filename) {
+  canvas.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => { resizeCanvas(); render(); });
+loadImage();
+</script>
+</body>
+</html>
