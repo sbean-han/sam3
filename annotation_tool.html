@@ -13,7 +13,6 @@
     padding: 8px 12px; background: #16213e; border-bottom: 1px solid #0f3460;
     flex-shrink: 0; flex-wrap: wrap;
   }
-
   .tool-group { display: flex; gap: 4px; align-items: center; padding-right: 12px; border-right: 1px solid #0f3460; }
   .tool-group:last-child { border-right: none; }
 
@@ -25,19 +24,14 @@
   button.active { background: #e94560; border-color: #e94560; }
 
   label { font-size: 12px; color: #aaa; }
-
   input[type=range] { width: 80px; accent-color: #e94560; }
   input[type=color] { width: 32px; height: 28px; border: 1px solid #0f3460; border-radius: 4px; cursor: pointer; background: none; padding: 2px; }
   input[type=number] { width: 50px; padding: 4px 6px; background: #0f3460; border: 1px solid #333; color: #eee; border-radius: 4px; font-size: 12px; }
-
   #zoom-level { font-size: 12px; color: #e94560; min-width: 40px; text-align: center; }
 
-  #canvas-wrapper {
-    flex: 1; overflow: hidden; position: relative; cursor: crosshair;
-  }
+  #canvas-wrapper { flex: 1; overflow: hidden; position: relative; cursor: crosshair; }
   #canvas-wrapper.panning { cursor: grab; }
   #canvas-wrapper.panning.dragging { cursor: grabbing; }
-
   #main-canvas { display: block; }
 
   #status-bar {
@@ -50,6 +44,35 @@
     background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 12px;
     font-size: 12px; pointer-events: none; display: none;
   }
+
+  /* ── Note dialog ── */
+  #note-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  #note-overlay.open { display: flex; }
+
+  #note-dialog {
+    background: #16213e; border: 1px solid #0f3460; border-radius: 10px;
+    padding: 20px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  #note-dialog h3 { font-size: 14px; color: #e94560; }
+  #note-dialog .meta { font-size: 11px; color: #888; }
+
+  #note-input {
+    width: 100%; min-height: 80px; resize: vertical;
+    background: #0f3460; border: 1px solid #333; color: #eee;
+    border-radius: 6px; padding: 8px; font-size: 13px; font-family: inherit;
+    outline: none;
+  }
+  #note-input:focus { border-color: #e94560; }
+
+  .note-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  #note-skip  { background: #333; border-color: #333; }
+  #note-cancel { background: transparent; border-color: #555; color: #aaa; }
+  #note-cancel:hover { background: #333; border-color: #888; color: #eee; }
 </style>
 </head>
 <body>
@@ -57,15 +80,15 @@
 <div id="toolbar">
   <div class="tool-group">
     <label>도구</label>
-    <button id="btn-brush" class="active" title="브러시 (B)">🖌 Brush</button>
+    <button id="btn-brush"   class="active" title="브러시 (B)">🖌 Brush</button>
     <button id="btn-polygon" title="폴리곤 (P)">⬡ Polygon</button>
-    <button id="btn-bbox" title="바운딩 박스 (R)">⬜ BBox</button>
-    <button id="btn-erase" title="지우개 (E)">◻ Erase</button>
+    <button id="btn-bbox"    title="바운딩 박스 (R)">⬜ BBox</button>
+    <button id="btn-erase"   title="지우개 (E)">◻ Erase</button>
   </div>
 
   <div class="tool-group">
     <label>크기</label>
-    <input type="range" id="brush-size" min="2" max="100" value="20">
+    <input type="range"  id="brush-size"     min="2" max="100" value="20">
     <input type="number" id="brush-size-num" min="2" max="100" value="20">
   </div>
 
@@ -79,21 +102,21 @@
 
   <div class="tool-group">
     <label>줌</label>
-    <button id="btn-zoom-out" title="축소 (-)">−</button>
+    <button id="btn-zoom-out"   title="축소 (-)">−</button>
     <span id="zoom-level">100%</span>
-    <button id="btn-zoom-in" title="확대 (+)">+</button>
+    <button id="btn-zoom-in"    title="확대 (+)">+</button>
     <button id="btn-zoom-reset" title="초기화 (0)">Reset</button>
   </div>
 
   <div class="tool-group">
-    <button id="btn-undo" title="실행 취소 (Ctrl+Z)">↩ Undo</button>
+    <button id="btn-undo"  title="실행 취소 (Ctrl+Z)">↩ Undo</button>
     <button id="btn-clear" title="전체 지우기">🗑 Clear</button>
   </div>
 
   <div class="tool-group">
     <button id="btn-export-mask">⬇ Mask PNG</button>
     <button id="btn-export-overlay">⬇ Overlay PNG</button>
-    <button id="btn-export-bbox">⬇ BBox JSON</button>
+    <button id="btn-export-json">⬇ Annotations JSON</button>
   </div>
 </div>
 
@@ -106,6 +129,20 @@
   <span id="coord-display">x: 0, y: 0</span>
   <span id="image-size-display"></span>
   <span>Space+드래그: 이동 | 휠: 줌 | B/P/R/E: 도구 전환</span>
+</div>
+
+<!-- Note dialog -->
+<div id="note-overlay">
+  <div id="note-dialog">
+    <h3>📝 Note 추가</h3>
+    <div class="meta" id="note-meta"></div>
+    <textarea id="note-input" placeholder="이 어노테이션에 대한 메모를 입력하세요..."></textarea>
+    <div class="note-actions">
+      <button id="note-cancel">취소</button>
+      <button id="note-skip">노트 없이 저장</button>
+      <button id="note-ok">저장</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -126,45 +163,51 @@ let isPanning = false;
 let spaceDown = false;
 let panStart = { x: 0, y: 0 };
 let panOrigin = { x: 0, y: 0 };
+let lastImgPos = null;
 
 // polygon state
 let polyPoints = [];
-let polyPreview = null; // current mouse pos for preview
+let polyPreview = null;
 
 // bbox state
-let bboxes = [];          // [{ x, y, w, h, color }] in image coords
-let bboxStart = null;     // image coord where drag started
-let bboxPreview = null;   // current mouse image coord while dragging
+let bboxStart = null;
+let bboxPreview = null;
 
-// mask layers: undo stack entries = { imageData, bboxes }
+// annotations: bbox & polygon stored as objects (brush goes to maskCanvas)
+// { type, color, note, ...shape-specific }
+let annotations = [];
+
+// pending annotation waiting for note dialog confirmation
+let pendingAnnotation = null;
+
+// mask (brush strokes only)
 let maskCanvas = document.createElement('canvas');
 let maskCtx = maskCanvas.getContext('2d');
+
+// undo stack: { imageData, annotations }
 let undoStack = [];
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
 const wrapper = document.getElementById('canvas-wrapper');
-const canvas = document.getElementById('main-canvas');
-const ctx = canvas.getContext('2d');
+const canvas  = document.getElementById('main-canvas');
+const ctx     = canvas.getContext('2d');
 
 // ─── Image load ───────────────────────────────────────────────────────────────
 function loadImage() {
   img = new Image();
   img.onload = () => {
-    imgW = img.naturalWidth;
-    imgH = img.naturalHeight;
-    maskCanvas.width = imgW;
-    maskCanvas.height = imgH;
+    imgW = img.naturalWidth; imgH = img.naturalHeight;
+    maskCanvas.width = imgW; maskCanvas.height = imgH;
     maskCtx.clearRect(0, 0, imgW, imgH);
-    bboxes = [];
-    resizeCanvas();
-    fitToWindow();
+    annotations = [];
+    resizeCanvas(); fitToWindow();
     document.getElementById('image-size-display').textContent = `이미지: ${imgW}×${imgH}`;
     render();
   };
   img.onerror = () => {
-    // draw placeholder
     imgW = 800; imgH = 600;
     maskCanvas.width = imgW; maskCanvas.height = imgH;
+    annotations = [];
     resizeCanvas(); fitToWindow();
     document.getElementById('image-size-display').textContent = `이미지 없음 (${IMG_SRC})`;
     render();
@@ -179,24 +222,17 @@ function resizeCanvas() {
 }
 
 function fitToWindow() {
-  const scaleX = wrapper.clientWidth / imgW;
-  const scaleY = wrapper.clientHeight / imgH;
-  zoom = Math.min(scaleX, scaleY) * 0.9;
-  panX = (wrapper.clientWidth - imgW * zoom) / 2;
+  const s = Math.min(wrapper.clientWidth / imgW, wrapper.clientHeight / imgH) * 0.9;
+  zoom = s;
+  panX = (wrapper.clientWidth  - imgW * zoom) / 2;
   panY = (wrapper.clientHeight - imgH * zoom) / 2;
   updateZoomLabel();
 }
 
-// ─── Coordinate helpers ───────────────────────────────────────────────────────
-function screenToImage(sx, sy) {
-  return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
-}
-
-function imageToScreen(ix, iy) {
-  return { x: ix * zoom + panX, y: iy * zoom + panY };
-}
-
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+// ─── Coord helpers ────────────────────────────────────────────────────────────
+function screenToImage(sx, sy) { return { x: (sx - panX) / zoom, y: (sy - panY) / zoom }; }
+function imageToScreen(ix, iy) { return { x: ix * zoom + panX, y: iy * zoom + panY }; }
+function clamp(v, lo, hi)      { return Math.max(lo, Math.min(hi, v)); }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 function render() {
@@ -206,122 +242,134 @@ function render() {
   ctx.translate(panX, panY);
   ctx.scale(zoom, zoom);
 
-  // image
   if (img && img.complete && img.naturalWidth > 0) {
     ctx.imageSmoothingEnabled = zoom < 1;
     ctx.drawImage(img, 0, 0);
   } else {
-    // placeholder grid
     ctx.fillStyle = '#2a2a3e';
     ctx.fillRect(0, 0, imgW, imgH);
-    ctx.strokeStyle = '#444';
-    ctx.lineWidth = 1 / zoom;
-    for (let x = 0; x < imgW; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, imgH); ctx.stroke(); }
-    for (let y = 0; y < imgH; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(imgW, y); ctx.stroke(); }
     ctx.fillStyle = '#666'; ctx.font = `${20/zoom}px sans-serif`;
     ctx.fillText(`이미지를 찾을 수 없음: ${IMG_SRC}`, 20, 40);
   }
 
-  // mask overlay
+  // brush mask overlay
   ctx.globalAlpha = maskOpacity;
   ctx.drawImage(maskCanvas, 0, 0);
   ctx.globalAlpha = 1;
 
-  ctx.restore();
-
-  // polygon preview (screen coords)
-  if (tool === 'polygon' && polyPoints.length > 0) {
-    ctx.save();
-    ctx.strokeStyle = '#00ffff';
-    ctx.fillStyle = 'rgba(0,255,255,0.15)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 3]);
-
-    const pts = polyPoints.map(p => imageToScreen(p.x, p.y));
-
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    if (polyPreview) {
-      ctx.lineTo(polyPreview.x, polyPreview.y);
-      // close preview line
-      ctx.lineTo(pts[0].x, pts[0].y);
-      ctx.fill();
-    }
-    ctx.stroke();
-
-    // dots
-    pts.forEach((p, i) => {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, i === 0 ? 6 : 4, 0, Math.PI * 2);
-      ctx.fillStyle = i === 0 ? '#ff0' : '#00ffff';
-      ctx.setLineDash([]);
-      ctx.fill();
-    });
-
-    ctx.restore();
-  }
-
   // image border
-  ctx.save();
-  ctx.translate(panX, panY);
-  ctx.scale(zoom, zoom);
   ctx.strokeStyle = 'rgba(255,255,255,0.2)';
   ctx.lineWidth = 1 / zoom;
   ctx.strokeRect(0, 0, imgW, imgH);
   ctx.restore();
 
-  // draw committed bboxes (screen coords)
-  bboxes.forEach(b => drawBboxScreen(b.x, b.y, b.w, b.h, b.color, false));
+  // committed annotations (screen space)
+  annotations.forEach(a => drawAnnotation(a, false));
 
-  // draw bbox preview while dragging
+  // bbox preview while dragging
   if (tool === 'bbox' && bboxStart && bboxPreview) {
     const x = Math.min(bboxStart.x, bboxPreview.x);
     const y = Math.min(bboxStart.y, bboxPreview.y);
-    const w = Math.abs(bboxPreview.x - bboxStart.x);
-    const h = Math.abs(bboxPreview.y - bboxStart.y);
-    drawBboxScreen(x, y, w, h, maskColor, true);
+    drawAnnotation({ type: 'bbox', x, y, w: Math.abs(bboxPreview.x - bboxStart.x), h: Math.abs(bboxPreview.y - bboxStart.y), color: maskColor, note: '' }, true);
+  }
+
+  // polygon in-progress preview
+  if (tool === 'polygon' && polyPoints.length > 0) {
+    const pts = polyPoints.map(p => imageToScreen(p.x, p.y));
+    ctx.save();
+    ctx.strokeStyle = '#00ffff';
+    ctx.fillStyle = 'rgba(0,255,255,0.15)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (polyPreview) { ctx.lineTo(polyPreview.x, polyPreview.y); ctx.lineTo(pts[0].x, pts[0].y); ctx.fill(); }
+    ctx.stroke();
+    pts.forEach((p, i) => {
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, i === 0 ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? '#ff0' : '#00ffff';
+      ctx.fill();
+    });
+    ctx.restore();
   }
 }
 
-function drawBboxScreen(ix, iy, iw, ih, color, isPreview) {
-  const tl = imageToScreen(ix, iy);
-  const br = imageToScreen(ix + iw, iy + ih);
-  const sw = br.x - tl.x, sh = br.y - tl.y;
+function drawAnnotation(a, isPreview) {
+  if (a.type === 'bbox') {
+    const tl = imageToScreen(a.x, a.y);
+    const br = imageToScreen(a.x + a.w, a.y + a.h);
+    const sw = br.x - tl.x, sh = br.y - tl.y;
 
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = isPreview ? 1.5 : 2;
-  ctx.setLineDash(isPreview ? [5, 3] : []);
-  ctx.fillStyle = color + '22';
-  ctx.fillRect(tl.x, tl.y, sw, sh);
-  ctx.strokeRect(tl.x, tl.y, sw, sh);
+    ctx.save();
+    ctx.strokeStyle = a.color;
+    ctx.lineWidth = isPreview ? 1.5 : 2;
+    ctx.setLineDash(isPreview ? [5, 3] : []);
+    ctx.fillStyle = a.color + '22';
+    ctx.fillRect(tl.x, tl.y, sw, sh);
+    ctx.strokeRect(tl.x, tl.y, sw, sh);
 
-  // corner handles
-  const hs = 5;
-  [[tl.x, tl.y], [br.x, tl.y], [tl.x, br.y], [br.x, br.y]].forEach(([cx, cy]) => {
-    ctx.setLineDash([]);
-    ctx.fillStyle = color;
-    ctx.fillRect(cx - hs, cy - hs, hs * 2, hs * 2);
-  });
+    // corner handles
+    if (!isPreview) {
+      const hs = 5;
+      [[tl.x,tl.y],[br.x,tl.y],[tl.x,br.y],[br.x,br.y]].forEach(([cx,cy]) => {
+        ctx.setLineDash([]);
+        ctx.fillStyle = a.color;
+        ctx.fillRect(cx-hs, cy-hs, hs*2, hs*2);
+      });
+    }
 
-  // size label
-  if (!isPreview) {
+    // size label + note chip
     ctx.setLineDash([]);
     ctx.font = '11px monospace';
-    ctx.fillStyle = '#000';
-    ctx.fillRect(tl.x + 2, tl.y + 2, ctx.measureText(`${Math.round(iw)}×${Math.round(ih)}`).width + 6, 16);
-    ctx.fillStyle = color;
-    ctx.fillText(`${Math.round(iw)}×${Math.round(ih)}`, tl.x + 5, tl.y + 14);
+    const sizeText = `${Math.round(a.w)}×${Math.round(a.h)}`;
+    const noteText = a.note ? ` · ${a.note}` : '';
+    const labelText = sizeText + noteText;
+    const tw = ctx.measureText(labelText).width + 8;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(tl.x, tl.y - 18, tw, 16);
+    ctx.fillStyle = a.color;
+    ctx.fillText(labelText, tl.x + 4, tl.y - 5);
+    ctx.restore();
+
+  } else if (a.type === 'polygon') {
+    if (!a.points || a.points.length < 2) return;
+    const pts = a.points.map(p => imageToScreen(p.x, p.y));
+
+    ctx.save();
+    ctx.strokeStyle = a.color;
+    ctx.lineWidth = isPreview ? 1.5 : 2;
+    ctx.setLineDash(isPreview ? [5, 3] : []);
+    ctx.fillStyle = a.color + '33';
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // note chip near first point
+    if (!isPreview && a.note) {
+      const p0 = pts[0];
+      ctx.setLineDash([]);
+      ctx.font = '11px monospace';
+      const tw = ctx.measureText(a.note).width + 8;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(p0.x, p0.y - 18, tw, 16);
+      ctx.fillStyle = a.color;
+      ctx.fillText(a.note, p0.x + 4, p0.y - 5);
+    }
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 // ─── Undo ─────────────────────────────────────────────────────────────────────
 function saveUndo() {
   undoStack.push({
     imageData: maskCtx.getImageData(0, 0, imgW, imgH),
-    bboxes: JSON.parse(JSON.stringify(bboxes)),
+    annotations: JSON.parse(JSON.stringify(annotations)),
   });
   if (undoStack.length > 30) undoStack.shift();
 }
@@ -330,11 +378,11 @@ function undo() {
   if (undoStack.length === 0) return;
   const snap = undoStack.pop();
   maskCtx.putImageData(snap.imageData, 0, 0);
-  bboxes = snap.bboxes;
+  annotations = snap.annotations;
   render();
 }
 
-// ─── Drawing tools ────────────────────────────────────────────────────────────
+// ─── Brush drawing ────────────────────────────────────────────────────────────
 function paintBrush(ix, iy, erase) {
   maskCtx.save();
   maskCtx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
@@ -346,85 +394,100 @@ function paintBrush(ix, iy, erase) {
 }
 
 function paintLine(ix1, iy1, ix2, iy2, erase) {
-  const dist = Math.hypot(ix2 - ix1, iy2 - iy1);
+  const dist = Math.hypot(ix2-ix1, iy2-iy1);
   const steps = Math.max(1, Math.ceil(dist / (brushSize / 4)));
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    paintBrush(ix1 + (ix2 - ix1) * t, iy1 + (iy2 - iy1) * t, erase);
+    paintBrush(ix1+(ix2-ix1)*t, iy1+(iy2-iy1)*t, erase);
   }
 }
 
+// ─── Polygon ──────────────────────────────────────────────────────────────────
 function finishPolygon() {
   if (polyPoints.length < 3) { cancelPolygon(); return; }
-  saveUndo();
-  maskCtx.save();
-  maskCtx.globalCompositeOperation = 'source-over';
-  maskCtx.fillStyle = maskColor;
-  maskCtx.beginPath();
-  maskCtx.moveTo(polyPoints[0].x, polyPoints[0].y);
-  for (let i = 1; i < polyPoints.length; i++) maskCtx.lineTo(polyPoints[i].x, polyPoints[i].y);
-  maskCtx.closePath();
-  maskCtx.fill();
-  maskCtx.restore();
-  polyPoints = [];
-  polyPreview = null;
+  const points = [...polyPoints];
+  polyPoints = []; polyPreview = null;
   document.getElementById('polygon-hint').style.display = 'none';
   render();
+
+  pendingAnnotation = { type: 'polygon', points, color: maskColor, note: '' };
+  openNoteDialog('Polygon', `점 ${points.length}개`);
 }
 
 function cancelPolygon() {
-  polyPoints = [];
-  polyPreview = null;
+  polyPoints = []; polyPreview = null;
   document.getElementById('polygon-hint').style.display = 'none';
   render();
 }
 
-// ─── Mouse events ─────────────────────────────────────────────────────────────
-let lastImgPos = null;
+// ─── Note dialog ──────────────────────────────────────────────────────────────
+function openNoteDialog(typeLabel, metaText) {
+  document.getElementById('note-dialog').querySelector('h3').textContent = `📝 Note 추가 — ${typeLabel}`;
+  document.getElementById('note-meta').textContent = metaText;
+  document.getElementById('note-input').value = '';
+  document.getElementById('note-overlay').classList.add('open');
+  setTimeout(() => document.getElementById('note-input').focus(), 50);
+}
 
+function closeNoteDialog() {
+  document.getElementById('note-overlay').classList.remove('open');
+  pendingAnnotation = null;
+}
+
+function commitPending(note) {
+  if (!pendingAnnotation) return;
+  saveUndo();
+  pendingAnnotation.note = note;
+  annotations.push(pendingAnnotation);
+  pendingAnnotation = null;
+  document.getElementById('note-overlay').classList.remove('open');
+  render();
+}
+
+document.getElementById('note-ok').onclick = () => {
+  commitPending(document.getElementById('note-input').value.trim());
+};
+document.getElementById('note-skip').onclick = () => commitPending('');
+document.getElementById('note-cancel').onclick = closeNoteDialog;
+
+document.getElementById('note-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitPending(document.getElementById('note-input').value.trim()); }
+  if (e.key === 'Escape') closeNoteDialog();
+});
+
+// click outside dialog to cancel
+document.getElementById('note-overlay').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('note-overlay')) closeNoteDialog();
+});
+
+// ─── Mouse events ─────────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', (e) => {
   if (e.button === 1) return;
   const sp = { x: e.offsetX, y: e.offsetY };
 
-  // panning mode
   if (spaceDown || e.button === 2) {
-    isPanning = true;
-    panStart = sp;
-    panOrigin = { x: panX, y: panY };
-    wrapper.classList.add('dragging');
-    return;
+    isPanning = true; panStart = sp; panOrigin = { x: panX, y: panY };
+    wrapper.classList.add('dragging'); return;
   }
 
   const ip = screenToImage(sp.x, sp.y);
 
   if (tool === 'polygon') {
-    // check if clicking near first point to close
     if (polyPoints.length >= 3) {
       const first = imageToScreen(polyPoints[0].x, polyPoints[0].y);
-      const d = Math.hypot(sp.x - first.x, sp.y - first.y);
-      if (d < 12) { finishPolygon(); return; }
+      if (Math.hypot(sp.x-first.x, sp.y-first.y) < 12) { finishPolygon(); return; }
     }
-    if (polyPoints.length === 0) {
-      document.getElementById('polygon-hint').style.display = 'block';
-      saveUndo();
-    }
+    if (polyPoints.length === 0) document.getElementById('polygon-hint').style.display = 'block';
     polyPoints.push({ x: ip.x, y: ip.y });
-    render();
-    return;
+    render(); return;
   }
 
-  // bbox
   if (tool === 'bbox') {
-    bboxStart = ip;
-    bboxPreview = ip;
-    render();
-    return;
+    bboxStart = ip; bboxPreview = ip; render(); return;
   }
 
   // brush / erase
-  isDrawing = true;
-  saveUndo();
-  lastImgPos = ip;
+  isDrawing = true; saveUndo(); lastImgPos = ip;
   paintBrush(ip.x, ip.y, tool === 'erase');
   render();
 });
@@ -432,33 +495,15 @@ canvas.addEventListener('mousedown', (e) => {
 canvas.addEventListener('mousemove', (e) => {
   const sp = { x: e.offsetX, y: e.offsetY };
   const ip = screenToImage(sp.x, sp.y);
+  document.getElementById('coord-display').textContent = `x: ${Math.round(ip.x)}, y: ${Math.round(ip.y)}`;
 
-  document.getElementById('coord-display').textContent =
-    `x: ${Math.round(ip.x)}, y: ${Math.round(ip.y)}`;
-
-  if (isPanning) {
-    panX = panOrigin.x + (sp.x - panStart.x);
-    panY = panOrigin.y + (sp.y - panStart.y);
-    render();
-    return;
-  }
-
-  if (tool === 'polygon') {
-    polyPreview = sp;
-    render();
-    return;
-  }
-
-  if (tool === 'bbox' && bboxStart) {
-    bboxPreview = ip;
-    render();
-    return;
-  }
+  if (isPanning) { panX = panOrigin.x+(sp.x-panStart.x); panY = panOrigin.y+(sp.y-panStart.y); render(); return; }
+  if (tool === 'polygon') { polyPreview = sp; render(); return; }
+  if (tool === 'bbox' && bboxStart) { bboxPreview = ip; render(); return; }
 
   if (isDrawing && lastImgPos) {
     paintLine(lastImgPos.x, lastImgPos.y, ip.x, ip.y, tool === 'erase');
-    lastImgPos = ip;
-    render();
+    lastImgPos = ip; render();
   }
 });
 
@@ -468,24 +513,21 @@ canvas.addEventListener('mouseup', (e) => {
     const y = Math.min(bboxStart.y, bboxPreview.y);
     const w = Math.abs(bboxPreview.x - bboxStart.x);
     const h = Math.abs(bboxPreview.y - bboxStart.y);
-    if (w > 2 && h > 2) {
-      saveUndo();
-      bboxes.push({ x, y, w, h, color: maskColor });
-    }
     bboxStart = null; bboxPreview = null;
-    render();
+    if (w > 2 && h > 2) {
+      pendingAnnotation = { type: 'bbox', x, y, w, h, color: maskColor, note: '' };
+      render();
+      openNoteDialog('BBox', `x:${Math.round(x)} y:${Math.round(y)}  ${Math.round(w)}×${Math.round(h)}`);
+    } else { render(); }
     return;
   }
   isDrawing = false; isPanning = false;
-  wrapper.classList.remove('dragging');
-  lastImgPos = null;
+  wrapper.classList.remove('dragging'); lastImgPos = null;
 });
 
 canvas.addEventListener('mouseleave', () => {
-  isDrawing = false; isPanning = false;
-  bboxPreview = null;
-  wrapper.classList.remove('dragging');
-  lastImgPos = null;
+  isDrawing = false; isPanning = false; bboxPreview = null;
+  wrapper.classList.remove('dragging'); lastImgPos = null;
 });
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -493,19 +535,16 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 // ─── Wheel zoom ───────────────────────────────────────────────────────────────
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-  const mx = e.offsetX, my = e.offsetY;
+  const factor = e.deltaY < 0 ? 1.1 : 1/1.1;
   const newZoom = clamp(zoom * factor, 0.05, 20);
-  // zoom toward mouse pointer
-  panX = mx - (mx - panX) * (newZoom / zoom);
-  panY = my - (my - panY) * (newZoom / zoom);
-  zoom = newZoom;
-  updateZoomLabel();
-  render();
+  panX = e.offsetX - (e.offsetX - panX) * (newZoom / zoom);
+  panY = e.offsetY - (e.offsetY - panY) * (newZoom / zoom);
+  zoom = newZoom; updateZoomLabel(); render();
 }, { passive: false });
 
 // ─── Keyboard ─────────────────────────────────────────────────────────────────
 window.addEventListener('keydown', (e) => {
+  if (document.getElementById('note-overlay').classList.contains('open')) return;
   if (e.code === 'Space') { spaceDown = true; wrapper.classList.add('panning'); e.preventDefault(); }
   if (e.key === 'b' || e.key === 'B') setTool('brush');
   if (e.key === 'p' || e.key === 'P') setTool('polygon');
@@ -515,7 +554,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && tool === 'polygon') finishPolygon();
   if (e.key === 'Escape' && tool === 'polygon') cancelPolygon();
   if (e.key === '+' || e.key === '=') zoomBy(1.2);
-  if (e.key === '-') zoomBy(1 / 1.2);
+  if (e.key === '-') zoomBy(1/1.2);
   if (e.key === '0') { fitToWindow(); render(); }
 });
 
@@ -523,26 +562,24 @@ window.addEventListener('keyup', (e) => {
   if (e.code === 'Space') { spaceDown = false; wrapper.classList.remove('panning'); }
 });
 
-// ─── Toolbar controls ─────────────────────────────────────────────────────────
+// ─── Toolbar ──────────────────────────────────────────────────────────────────
 function setTool(t) {
   tool = t;
   if (t !== 'polygon') cancelPolygon();
   if (t !== 'bbox') { bboxStart = null; bboxPreview = null; }
-  document.getElementById('btn-brush').classList.toggle('active', t === 'brush');
-  document.getElementById('btn-polygon').classList.toggle('active', t === 'polygon');
-  document.getElementById('btn-bbox').classList.toggle('active', t === 'bbox');
-  document.getElementById('btn-erase').classList.toggle('active', t === 'erase');
+  ['brush','polygon','bbox','erase'].forEach(n =>
+    document.getElementById(`btn-${n}`).classList.toggle('active', t === n));
 }
 
-document.getElementById('btn-brush').onclick = () => setTool('brush');
-document.getElementById('btn-polygon').onclick = () => setTool('polygon');
-document.getElementById('btn-bbox').onclick = () => setTool('bbox');
-document.getElementById('btn-erase').onclick = () => setTool('erase');
+document.getElementById('btn-brush').onclick   = () => setTool('brush');
+document.getElementById('btn-polygon').onclick  = () => setTool('polygon');
+document.getElementById('btn-bbox').onclick     = () => setTool('bbox');
+document.getElementById('btn-erase').onclick    = () => setTool('erase');
 
 const brushSlider = document.getElementById('brush-size');
-const brushNum = document.getElementById('brush-size-num');
+const brushNum    = document.getElementById('brush-size-num');
 brushSlider.oninput = () => { brushSize = +brushSlider.value; brushNum.value = brushSlider.value; };
-brushNum.oninput = () => { brushSize = clamp(+brushNum.value, 2, 100); brushSlider.value = brushSize; };
+brushNum.oninput    = () => { brushSize = clamp(+brushNum.value, 2, 100); brushSlider.value = brushSize; };
 
 document.getElementById('mask-color').oninput = (e) => { maskColor = e.target.value; };
 
@@ -553,77 +590,74 @@ opacitySlider.oninput = () => {
   render();
 };
 
-document.getElementById('btn-zoom-in').onclick = () => zoomBy(1.2);
-document.getElementById('btn-zoom-out').onclick = () => zoomBy(1 / 1.2);
+document.getElementById('btn-zoom-in').onclick    = () => zoomBy(1.2);
+document.getElementById('btn-zoom-out').onclick   = () => zoomBy(1/1.2);
 document.getElementById('btn-zoom-reset').onclick = () => { fitToWindow(); render(); };
 document.getElementById('btn-undo').onclick = undo;
 document.getElementById('btn-clear').onclick = () => {
-  if (!confirm('마스크와 BBox를 모두 지우시겠습니까?')) return;
-  saveUndo();
-  maskCtx.clearRect(0, 0, imgW, imgH);
-  bboxes = [];
-  render();
+  if (!confirm('마스크와 모든 어노테이션을 지우시겠습니까?')) return;
+  saveUndo(); maskCtx.clearRect(0, 0, imgW, imgH); annotations = []; render();
 };
 
 function zoomBy(factor) {
-  const cx = wrapper.clientWidth / 2, cy = wrapper.clientHeight / 2;
+  const cx = wrapper.clientWidth/2, cy = wrapper.clientHeight/2;
   const newZoom = clamp(zoom * factor, 0.05, 20);
   panX = cx - (cx - panX) * (newZoom / zoom);
   panY = cy - (cy - panY) * (newZoom / zoom);
-  zoom = newZoom;
-  updateZoomLabel();
-  render();
+  zoom = newZoom; updateZoomLabel(); render();
 }
-
 function updateZoomLabel() {
   document.getElementById('zoom-level').textContent = Math.round(zoom * 100) + '%';
 }
 
 // ─── Export ───────────────────────────────────────────────────────────────────
-document.getElementById('btn-export-mask').onclick = () => {
-  // export pure mask (black bg, colored mask) as PNG
+function rasterizedMask() {
   const out = document.createElement('canvas');
   out.width = imgW; out.height = imgH;
   const oc = out.getContext('2d');
-  oc.fillStyle = '#000';
-  oc.fillRect(0, 0, imgW, imgH);
+  oc.fillStyle = '#000'; oc.fillRect(0, 0, imgW, imgH);
   oc.drawImage(maskCanvas, 0, 0);
-  download(out, 'mask.png');
-};
+  // rasterize polygon annotations into mask
+  annotations.filter(a => a.type === 'polygon').forEach(a => {
+    if (!a.points || a.points.length < 3) return;
+    oc.fillStyle = a.color;
+    oc.beginPath();
+    oc.moveTo(a.points[0].x, a.points[0].y);
+    for (let i = 1; i < a.points.length; i++) oc.lineTo(a.points[i].x, a.points[i].y);
+    oc.closePath(); oc.fill();
+  });
+  return out;
+}
+
+document.getElementById('btn-export-mask').onclick = () => download(rasterizedMask(), 'mask.png');
 
 document.getElementById('btn-export-overlay').onclick = () => {
-  // export image + mask blended
   const out = document.createElement('canvas');
   out.width = imgW; out.height = imgH;
   const oc = out.getContext('2d');
   if (img && img.complete && img.naturalWidth > 0) oc.drawImage(img, 0, 0);
   oc.globalAlpha = maskOpacity;
-  oc.drawImage(maskCanvas, 0, 0);
+  oc.drawImage(rasterizedMask(), 0, 0);
   download(out, 'overlay.png');
 };
 
-document.getElementById('btn-export-bbox').onclick = () => {
-  const data = bboxes.map((b, i) => ({
-    id: i,
-    x: Math.round(b.x), y: Math.round(b.y),
-    w: Math.round(b.w), h: Math.round(b.h),
-    x2: Math.round(b.x + b.w), y2: Math.round(b.y + b.h),
-    color: b.color,
-  }));
+document.getElementById('btn-export-json').onclick = () => {
+  const data = annotations.map((a, i) => {
+    const base = { id: i, type: a.type, color: a.color, note: a.note };
+    if (a.type === 'bbox') return { ...base, x: Math.round(a.x), y: Math.round(a.y), w: Math.round(a.w), h: Math.round(a.h), x2: Math.round(a.x+a.w), y2: Math.round(a.y+a.h) };
+    if (a.type === 'polygon') return { ...base, points: a.points.map(p => ({ x: Math.round(p.x), y: Math.round(p.y) })) };
+    return base;
+  });
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'bboxes.json';
-  a.click();
+  a.href = URL.createObjectURL(blob); a.download = 'annotations.json'; a.click();
   URL.revokeObjectURL(a.href);
 };
 
-function download(canvas, filename) {
-  canvas.toBlob(blob => {
+function download(c, filename) {
+  c.toBlob(blob => {
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
     URL.revokeObjectURL(a.href);
   });
 }
